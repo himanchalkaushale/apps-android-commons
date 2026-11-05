@@ -6,19 +6,21 @@ import android.view.MotionEvent
 import android.view.ViewParent
 import com.facebook.common.logging.FLog
 
+private val TAG = ZoomableTouchHandler::class.java
+
 /**
  * Handles touch gestures, tap detection, and event dispatch for a zoomable view.
  */
 class ZoomableTouchHandler(
     context: Context,
-    private val logTag: Class<*>,
-    private val viewHashCodeProvider: () -> Int,
     private val zoomableControllerProvider: () -> ZoomableController?,
     private val parentProvider: () -> ViewParent?,
     private val superOnTouchEvent: (MotionEvent) -> Boolean,
+    gestureDetector: GestureDetector? = null,
 ) {
     private val tapListenerWrapper = GestureListenerWrapper()
-    private var tapGestureDetector: GestureDetector? = GestureDetector(context, tapListenerWrapper)
+    private val tapGestureDetector: GestureDetector? =
+        gestureDetector ?: GestureDetector(context, tapListenerWrapper)
 
     /**
      * Whether dial tone feedback or interception behavior is enabled.
@@ -55,44 +57,37 @@ class ZoomableTouchHandler(
      * @param event the motion event being dispatched
      * @return true if the event was consumed, false otherwise
      */
-    /**
-     * Dispatches touch events across the tap gesture detector, zoomable controller,
-     * and fallback view hierarchy.
-     *
-     * @param event the motion event being dispatched
-     * @return true if the event was consumed, false otherwise
-     */
     fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
-        val viewHashCode = viewHashCodeProvider()
         val zoomableController = zoomableControllerProvider()
 
-        FLog.v(logTag, "onTouchEvent: %d, view %d, received", action, viewHashCode)
+        FLog.v(TAG, "onTouchEvent: %d, received", action)
 
-        val handled = when {
-            !isDialToneEnabled && tapGestureDetector?.onTouchEvent(event) == true -> {
-                FLog.v(logTag, "onTouchEvent: %d, view %d, handled by tap gesture detector", action, viewHashCode)
-                true
-            }
-            !isDialToneEnabled && zoomableController?.onTouchEvent(event) == true -> {
-                FLog.v(logTag, "onTouchEvent: %d, view %d, handled by zoomable controller", action, viewHashCode)
-                if (!allowTouchInterceptionWhileZoomed && !zoomableController.isIdentity()) {
-                    parentProvider()?.requestDisallowInterceptTouchEvent(true)
+        val handled =
+            when {
+                !isDialToneEnabled && tapGestureDetector?.onTouchEvent(event) == true -> {
+                    FLog.v(TAG, "onTouchEvent: %d, handled by tap gesture detector", action)
+                    true
                 }
-                true
+                !isDialToneEnabled && zoomableController?.onTouchEvent(event) == true -> {
+                    FLog.v(TAG, "onTouchEvent: %d, handled by zoomable controller", action)
+                    if (!allowTouchInterceptionWhileZoomed && !zoomableController.isIdentity()) {
+                        parentProvider()?.requestDisallowInterceptTouchEvent(true)
+                    }
+                    true
+                }
+                superOnTouchEvent(event) -> {
+                    FLog.v(TAG, "onTouchEvent: %d, handled by the super", action)
+                    true
+                }
+                else -> {
+                    val cancelEvent = MotionEvent.obtain(event).apply { this.action = MotionEvent.ACTION_CANCEL }
+                    tapGestureDetector?.onTouchEvent(cancelEvent)
+                    zoomableController?.onTouchEvent(cancelEvent)
+                    cancelEvent.recycle()
+                    false
+                }
             }
-            superOnTouchEvent(event) -> {
-                FLog.v(logTag, "onTouchEvent: %d, view %d, handled by the super", action, viewHashCode)
-                true
-            }
-            else -> {
-                val cancelEvent = MotionEvent.obtain(event).apply { this.action = MotionEvent.ACTION_CANCEL }
-                tapGestureDetector?.onTouchEvent(cancelEvent)
-                zoomableController?.onTouchEvent(cancelEvent)
-                cancelEvent.recycle()
-                false
-            }
-        }
 
         return handled
     }
